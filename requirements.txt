@@ -1,11 +1,11 @@
 streamlit
-googletrans==4.0.0rc1
 langdetect
 rapidfuzz
 PyPDF2
 deep_translator
 dotenv
 langchain
-openai
+openai>=1.0.0
 deep_translator
+
 
