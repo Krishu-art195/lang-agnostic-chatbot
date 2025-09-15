@@ -1,4 +1,3 @@
-
 # from google import genai
 from dotenv import load_dotenv
 from time import sleep
@@ -11,6 +10,7 @@ import re
 import textwrap
 from deep_translator import GoogleTranslator
 from openai import OpenAI
+from langdetect import detect
 load_dotenv()
 client = OpenAI(api_key=os.getenv("openAIapikey"))
 # Glossy Gradient Text with CSS
@@ -40,22 +40,29 @@ lang_shortcut = {'english' : 'en',
                  'tamil' : 'ta',
                  'telugu' : 'te',
                  'japanese' : 'ja'}
-def translate(data, user_language):
-      
-      user_language = user_language.lower()
-      
-      if user_language in lang_shortcut:
-        target = lang_shortcut[user_language]
-        result = GoogleTranslator(source='auto', target=target).translate(data)
-        print(result)
+    
+def translate(data,target_lang):
+    """Detects language and translates 'data' to 'target_lang'. Returns the translated string(or original id detection unsupported)
+    """
+    try:
+        u_lang=detect(data)
+    except Exception:
+        return data 
+
+    if u_lang in lang_shortcut.values():
+        try:
+            result = GoogleTranslator(source=u_lang,target=target_lang).translate(data)
+        
   
-        history = f'You asked: {data}\nTranslate to: {user_language}\nResult: {result}\n{'-'*40}\n'        
+            history = f'You asked: {data}\nDetected: {u_lang}\nResult: {result}\n{'-'*40}\n'        
           
-        with open('data.txt', 'a', encoding="utf-8") as f:
-            f.write(f'{history}\n')
-  
-      else:
-          print("Language not supported")
+            with open('data.txt', 'a', encoding="utf-8") as f:
+                f.write(history)
+            return result
+        except Exception:
+            return data
+    else:
+        return data
 
 
    
@@ -66,8 +73,9 @@ def pdf_to_text(pdf_path):
     reader = PdfReader(pdf_path)
     text = ""
     for page in reader.pages:
-        if page.extract_text():
-            text += page.extract_text() + "\n"
+        page_text=page.extract_text()
+        if page_text:
+            text += page_text + "\n"
     return text
 
 # -------------------------------
@@ -98,12 +106,15 @@ def retrieve_chunks(query, chunks, top_k=3):
 # Step 4: Generate answer using LLM
 # -------------------------------
 def answer_question(query, pdf_path):
+    lang=detect(query)
+    en_query=translate(query,'en')
     pdf_text = pdf_to_text(pdf_path)
     chunks = chunk_text(pdf_text, chunk_size=200, overlap=50)
-    retrieved = retrieve_chunks(query, chunks, top_k=3)
+    retrieved = retrieve_chunks(en_query, chunks, top_k=3)
+    
 
     if not retrieved:
-        return "❌ Sorry, no relevant information found in the PDF."
+        return None
 
     context = "\n\n".join(retrieved)
 
@@ -114,14 +125,40 @@ def answer_question(query, pdf_path):
     Context:
     {context}
 
-    Question: {query}
+    Question: {en_query}
 
     Give a clear and concise answer."""
     response = client.chat.completions.create(
         model="gpt-4o-mini",   
         messages=[{"role": "user", "content": prompt}],
         temperature=0)
-    return response.choices[0].message.content
+    new_response=translate(response.choices[0].message.content,lang)
+    return new_response
+#step -5:read multiple pdf
+def answer_from_pdfs(query, pdf_paths):
+    answers = []
+    for pdf_path in pdf_paths:
+        answer = answer_question(query, pdf_path)
+        if answer and "does not contain any information" not in answer.lower():
+            answers.append(f"📄 From **{pdf_path}**:\n{answer}")
+    if answers:
+        return "\n\n".join(answers)
+    else:
+        return "❌ Sorry, no relevant information found in the given PDFs."
+    
+# -------------------------------
+# Step 6: Save history
+# -------------------------------
+def save_history(query, answer):
+    wrapped_answer = textwrap.fill(answer, width=75)
+    history = (
+        f"Your query:\n{query}\n"
+        f"Response:\n{wrapped_answer}\n"
+        f"{'-'*40}\n"
+    )
+    with open("result.txt", "a", encoding="utf-8") as f:
+        f.write(history)
+
 #import streamlit as st
 #import random
 # Initialize chat history
@@ -132,16 +169,18 @@ if "messages" not in st.session_state:
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
-
+pdf_paths = ["FAQs-30-11-23.pdf", "Various_Scholarship_Scheme_for_B.Tech_students.pdf","Fees Information B Tech B Arch Admission thr JoSAA 2023.pdf","AC First Year UG Winter-2025 (July-2025 to Jan-2026) Raut Mam ver2 (1).pdf"]  # Add more PDFs here
 # Accept user input
 if prompt := st.chat_input("What is up?"):
     # Add user message to chat history
     st.session_state.messages.append({"role": "user", "content": prompt})
     # Display user message in chat message container
+    
     with st.chat_message("user"):
         st.markdown(prompt)
-        pdf_path = "FAQs-30-11-23.pdf"
-        answer = answer_question(prompt, pdf_path)
+        
+    
+        
         #print("Q:", query)
         #print("A:", answer)
     
@@ -153,17 +192,18 @@ if prompt := st.chat_input("What is up?"):
         
     
     # Display assistant response in chat message container
+    answer = answer_from_pdfs(prompt, pdf_paths)
     with st.chat_message("assistant"):
         message_placeholder = st.empty()
         full_response = answer
-        new_answer=translate(answer, 'hindi') 
+        #new_answer=translate(answer) 
 
     sleep(0.05)
                     # Add a blinking cursor to simulate typing
     message_placeholder.markdown(full_response + "▌")
     message_placeholder.markdown(full_response)
         # Add assistant response to chat history
-    st.session_state.messages.append({"role": "assistant", "content":(new_answer)})
+    st.session_state.messages.append({"role": "assistant", "content":(answer)})
 def save_history(prompt, answer):
     # wrap answer text so each line has max 15 characters
     wrapped_answer = textwrap.fill(answer, width=15)
@@ -176,6 +216,10 @@ def save_history(prompt, answer):
 
     with open("result.txt", "a", encoding="utf-8") as f:
         f.write(history)
+    save_history(prompt, answer)
 
     
+        
+
+
         
